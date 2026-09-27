@@ -5,6 +5,7 @@ import com.google.common.collect.HashBasedTable;
 import com.google.common.collect.Table;
 import org.bukkit.Material;
 import org.bukkit.entity.Player;
+import org.bukkit.inventory.ItemStack;
 import org.bukkit.plugin.Plugin;
 import ru.leymooo.antirelog.Antirelog;
 import ru.leymooo.antirelog.config.Settings;
@@ -23,6 +24,7 @@ public class CooldownManager {
     private final Settings settings;
     private final ScheduledExecutorService scheduledExecutorService;
     private final Table<Player, CooldownType, Long> cooldowns = HashBasedTable.create();
+    private final Table<Player, ItemStack, Long> potionCooldowns = HashBasedTable.create();
     private final Table<Player, CooldownType, CooldownRemoval> removalTasks = HashBasedTable.create();
 
     public CooldownManager(Antirelog plugin, Settings settings) {
@@ -39,8 +41,27 @@ public class CooldownManager {
         cooldowns.put(player, type, System.currentTimeMillis());
     }
 
+    public void addPotionCooldown(Player player, ItemStack potion) {
+        long now = System.currentTimeMillis();
+        long duration = settings.getPotionCooldown() * 1000L;
+        potionCooldowns.row(player).values().removeIf(added -> now - added >= duration);
+        potionCooldowns.put(player, potionKey(potion), now);
+    }
+
+    public long getPotionRemaining(Player player, ItemStack potion, long duration) {
+        Long added = potionCooldowns.get(player, potionKey(potion));
+        return added == null ? 0 : Math.max(0, duration - (System.currentTimeMillis() - added));
+    }
+
+    private ItemStack potionKey(ItemStack potion) {
+        ItemStack key = potion.clone();
+        key.setAmount(1);
+        return key;
+    }
+
     public void addItemCooldown(Player player, CooldownType type, long duration) {
         if (!VersionUtils.isVersion(11)) return;
+        if (type == CooldownType.POTION && settings.getPotionCooldown() >= 0) return;
 
         cancelRemovalTask(player, type, false);
 
@@ -122,6 +143,7 @@ public class CooldownManager {
 
     public void remove(Player player) {
         cooldowns.row(player).clear();
+        potionCooldowns.row(player).clear();
         removalTasks.row(player).forEach((ignore, removal) -> removal.cancel(false));
         removalTasks.row(player).clear();
     }
@@ -135,6 +157,7 @@ public class CooldownManager {
         }));
         removalTasks.clear();
         cooldowns.clear();
+        potionCooldowns.clear();
     }
 
     public Settings getSettings() {
