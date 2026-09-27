@@ -17,6 +17,7 @@ import org.bukkit.inventory.meta.Damageable;
 import org.bukkit.inventory.meta.ItemMeta;
 import org.geysermc.floodgate.api.FloodgateApi;
 import org.bukkit.event.player.PlayerInteractEvent;
+import org.bukkit.event.player.PlayerDropItemEvent;
 import org.bukkit.event.player.PlayerItemConsumeEvent;
 import org.bukkit.event.player.PlayerQuitEvent;
 import org.bukkit.inventory.ItemStack;
@@ -243,7 +244,17 @@ public class CooldownListener implements Listener {
     private void recordPotionUse(Player player, ItemStack potion) {
         if (settings.getPotionCooldown() > 0 && !pvpManager.isBypassed(player)) {
             cooldownManager.addPotionCooldown(player, potion);
+            if (!pvpManager.isPvPModeEnabled() || pvpManager.isInPvP(player)) {
+                cooldownManager.addPotionItemCooldown(player, potion, settings.getPotionCooldown() * 1000L);
+            }
         }
+    }
+
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
+    public void onDropPotion(PlayerDropItemEvent event) {
+        ItemStack item = event.getItemDrop().getItemStack();
+        cooldownManager.restorePotion(item);
+        event.getItemDrop().setItemStack(item);
     }
 
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = false)

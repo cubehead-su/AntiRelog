@@ -1,40 +1,39 @@
 package ru.leymooo.antirelog.manager;
 
-import com.comphenix.protocol.events.PacketContainer;
 import com.google.common.collect.HashBasedTable;
 import com.google.common.collect.Table;
 import org.bukkit.Material;
 import org.bukkit.entity.Player;
 import org.bukkit.inventory.ItemStack;
-import org.bukkit.plugin.Plugin;
+import org.bukkit.scheduler.BukkitTask;
 import ru.leymooo.antirelog.Antirelog;
 import ru.leymooo.antirelog.config.Settings;
-import ru.leymooo.antirelog.util.ProtocolLibUtils;
+import ru.leymooo.antirelog.util.PotionCooldowns;
 import ru.leymooo.antirelog.util.VersionUtils;
+import ru.leymooo.antirelog.util.VisualCooldownUtils;
 
-import java.util.concurrent.Executors;
-import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.ScheduledFuture;
-import java.util.concurrent.TimeUnit;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.Map;
+import java.util.Set;
 import java.util.function.Function;
 
 public class CooldownManager {
 
     private final Antirelog plugin;
     private final Settings settings;
-    private final ScheduledExecutorService scheduledExecutorService;
+    private final boolean potionGroupsSupported;
     private final Table<Player, CooldownType, Long> cooldowns = HashBasedTable.create();
     private final Table<Player, ItemStack, Long> potionCooldowns = HashBasedTable.create();
-    private final Table<Player, CooldownType, CooldownRemoval> removalTasks = HashBasedTable.create();
+    private final Table<Player, CooldownType, Long> itemCooldowns = HashBasedTable.create();
+    private final Map<Player, PotionCooldowns> potionItemCooldowns = new HashMap<>();
+    private BukkitTask itemCooldownTask;
 
     public CooldownManager(Antirelog plugin, Settings settings) {
         this.plugin = plugin;
         this.settings = settings;
-        if (plugin.isProtocolLibEnabled()) {
-            scheduledExecutorService = Executors.newSingleThreadScheduledExecutor();
-        } else {
-            scheduledExecutorService = null;
-        }
+        this.potionGroupsSupported = VersionUtils.getMajorVersion() > 21 || VersionUtils.isVersion(21, 2);
     }
 
     public void addCooldown(Player player, CooldownType type) {
@@ -54,52 +53,103 @@ public class CooldownManager {
     }
 
     private ItemStack potionKey(ItemStack potion) {
+        if (potionGroupsSupported) return PotionCooldowns.key(potion);
         ItemStack key = potion.clone();
         key.setAmount(1);
         return key;
     }
 
+    public void addPotionItemCooldown(Player player, ItemStack potion, long duration) {
+        if (!potionGroupsSupported || duration <= 0) return;
+        PotionCooldowns visuals = potionItemCooldowns.computeIfAbsent(player, ignored -> new PotionCooldowns(plugin));
+        long now = System.currentTimeMillis();
+        visuals.add(potion, now + duration);
+        startItemCooldownTask();
+    }
+
+    public void restorePotion(ItemStack potion) {
+        if (potionGroupsSupported) PotionCooldowns.restore(potion);
+    }
+
     public void addItemCooldown(Player player, CooldownType type, long duration) {
         if (!VersionUtils.isVersion(11)) return;
         if (type == CooldownType.POTION && settings.getPotionCooldown() >= 0) return;
+        if (duration <= 0) {
+            removeItemCooldown(player, type);
+            return;
+        }
 
-        cancelRemovalTask(player, type, false);
-
-        int durationInTicks = (int) Math.ceil(duration / 50.0);
+        long expiresAt = System.currentTimeMillis() + duration;
+        itemCooldowns.put(player, type, expiresAt);
+        int durationInTicks = toTicks(duration);
         for (Material material : type.getAllMaterials()) {
             player.setCooldown(material, durationInTicks);
         }
-
-        if (scheduledExecutorService == null) return;
-
-        CooldownRemoval removal = new CooldownRemoval();
-        ScheduledFuture<?> future = scheduledExecutorService.schedule(() -> {
-            if (!plugin.isEnabled()) return;
-
-            plugin.getServer().getScheduler().runTask(plugin, () -> {
-                if (removalTasks.get(player, type) == removal) {
-                    removeItemCooldown(player, type);
-                }
-            });
-        }, duration, TimeUnit.MILLISECONDS);
-        removal.setFuture(future);
-        removalTasks.put(player, type, removal);
+        if (type == CooldownType.POTION) {
+            if (potionGroupsSupported) {
+                potionItemCooldowns.computeIfAbsent(player, ignored -> new PotionCooldowns(plugin)).blockAll(expiresAt);
+            }
+            if (plugin.getServer().getPluginManager().isPluginEnabled("VisualCooldown")) {
+                VisualCooldownUtils.setPotionCooldown(player, durationInTicks);
+            }
+        }
+        startItemCooldownTask();
     }
 
     public void removeItemCooldown(Player player, CooldownType type) {
         if (!VersionUtils.isVersion(11)) return;
 
-        cancelRemovalTask(player, type, false);
+        if (type == CooldownType.POTION) {
+            PotionCooldowns visuals = potionItemCooldowns.remove(player);
+            if (visuals != null) visuals.clear(player);
+        }
+        if (itemCooldowns.remove(player, type) == null) return;
         for (Material material : type.getAllMaterials()) {
             player.setCooldown(material, 0);
         }
+        if (type == CooldownType.POTION && plugin.getServer().getPluginManager().isPluginEnabled("VisualCooldown")) {
+            VisualCooldownUtils.setPotionCooldown(player, 0);
+        }
     }
 
-    private void cancelRemovalTask(Player player, CooldownType type, boolean mayInterruptIfRunning) {
-        CooldownRemoval removal = removalTasks.remove(player, type);
-        if (removal != null) {
-            removal.cancel(mayInterruptIfRunning);
+    private void startItemCooldownTask() {
+        if (itemCooldownTask == null || itemCooldownTask.isCancelled()) {
+            itemCooldownTask = plugin.getServer().getScheduler().runTaskTimer(plugin, this::tickItemCooldowns, 1L, 1L);
         }
+    }
+
+    private void tickItemCooldowns() {
+        long now = System.currentTimeMillis();
+        for (Table.Cell<Player, CooldownType, Long> cell : new ArrayList<>(itemCooldowns.cellSet())) {
+            Player player = cell.getRowKey();
+            CooldownType type = cell.getColumnKey();
+            long remaining = cell.getValue() - now;
+            if (!player.isOnline() || remaining <= 0) {
+                removeItemCooldown(player, type);
+            } else if (type == CooldownType.POTION) {
+                int ticks = toTicks(remaining);
+                for (Material material : type.getAllMaterials()) {
+                    if (Math.abs((long) player.getCooldown(material) - ticks) > 2) {
+                        player.setCooldown(material, ticks);
+                    }
+                }
+            }
+        }
+        for (Player player : new ArrayList<>(potionItemCooldowns.keySet())) {
+            PotionCooldowns visuals = potionItemCooldowns.get(player);
+            if (!player.isOnline() || !visuals.synchronize(player, now)) {
+                visuals.clear(player);
+                potionItemCooldowns.remove(player);
+            }
+        }
+        if (itemCooldowns.isEmpty() && potionItemCooldowns.isEmpty()) {
+            itemCooldownTask.cancel();
+            itemCooldownTask = null;
+        }
+    }
+
+    private static int toTicks(long duration) {
+        return (int) Math.min(Integer.MAX_VALUE, Math.ceil(Math.max(0, duration) / 50.0));
     }
 
     public void enteredToPvp(Player player) {
@@ -108,23 +158,23 @@ public class CooldownManager {
             if (cooldown == 0) {
                 continue;
             }
-            if (cooldown > 0 && hasCooldown(player, cooldownType, cooldown * 1000)) {
-                addItemCooldown(player, cooldownType, getRemaining(player, cooldownType, cooldown * 1000));
+            if (cooldown > 0 && hasCooldown(player, cooldownType, cooldown * 1000L)) {
+                addItemCooldown(player, cooldownType, getRemaining(player, cooldownType, cooldown * 1000L));
             }
             if (cooldown < 0) {
                 addItemCooldown(player, cooldownType, 300 * 1000);
             }
         }
+        long duration = settings.getPotionCooldown() * 1000L;
+        if (duration > 0) {
+            long now = System.currentTimeMillis();
+            potionCooldowns.row(player).forEach((potion, added) -> addPotionItemCooldown(player, potion, duration - (now - added)));
+        }
     }
 
     public void removedFromPvp(Player player) {
         for (CooldownType cooldownType : CooldownType.values) {
-            int cooldown = cooldownType.getCooldown(settings);
-            if (cooldown < 0) {
-                removeItemCooldown(player, cooldownType);
-            } else if (cooldown > 0 && hasCooldown(player, cooldownType, cooldown * 1000)) {
-                removeItemCooldown(player, cooldownType);
-            }
+            removeItemCooldown(player, cooldownType);
         }
     }
 
@@ -138,44 +188,29 @@ public class CooldownManager {
 
     public long getRemaining(Player player, CooldownType type, long duration) {
         Long added = cooldowns.get(player, type);
-        return duration - (System.currentTimeMillis() - added);
+        return added == null ? 0 : Math.max(0, duration - (System.currentTimeMillis() - added));
     }
 
     public void remove(Player player) {
+        removedFromPvp(player);
         cooldowns.row(player).clear();
         potionCooldowns.row(player).clear();
-        removalTasks.row(player).forEach((ignore, removal) -> removal.cancel(false));
-        removalTasks.row(player).clear();
     }
 
     public void clearAll() {
-        removalTasks.rowMap().forEach((player, tasks) -> tasks.forEach((type, removal) -> {
-            removal.cancel(true);
-            for (Material material : type.getAllMaterials()) {
-                player.setCooldown(material, 0);
-            }
-        }));
-        removalTasks.clear();
+        Set<Player> players = new HashSet<>(itemCooldowns.rowKeySet());
+        players.addAll(potionItemCooldowns.keySet());
+        players.forEach(this::removedFromPvp);
+        if (itemCooldownTask != null) {
+            itemCooldownTask.cancel();
+            itemCooldownTask = null;
+        }
         cooldowns.clear();
         potionCooldowns.clear();
     }
 
     public Settings getSettings() {
         return settings;
-    }
-
-    private static final class CooldownRemoval {
-        private ScheduledFuture<?> future;
-
-        private void setFuture(ScheduledFuture<?> future) {
-            this.future = future;
-        }
-
-        private void cancel(boolean mayInterruptIfRunning) {
-            if (future != null && !future.isCancelled()) {
-                future.cancel(mayInterruptIfRunning);
-            }
-        }
     }
 
     public enum CooldownType {

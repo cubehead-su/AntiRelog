@@ -3,7 +3,7 @@ version: "${project.version}"
 main: ru.leymooo.antirelog.Antirelog
 api-version: 1.13
 prefix: AntiRelog
-softdepend: [ WorldGuard, CMI, ProtocolLib, floodgate ]
+softdepend: [ WorldGuard, CMI, ProtocolLib, floodgate, VisualCooldown ]
 authors: [ Leymooo, seetch ]
 description: AntiRelog
 website: http://rubukkit.org/threads/125331/

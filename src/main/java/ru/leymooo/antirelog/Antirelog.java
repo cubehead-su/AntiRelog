@@ -55,6 +55,13 @@ public class Antirelog extends JavaPlugin {
     }
 
     @Override
+    public void onDisable() {
+        if (cooldownManager != null) {
+            cooldownManager.clearAll();
+        }
+    }
+
+    @Override
     public boolean onCommand(CommandSender sender, Command command, String label, String[] args) {
         if (args.length > 0) {
             if (args[0].equalsIgnoreCase("reload") && sender.hasPermission("antirelog.reload")) {
