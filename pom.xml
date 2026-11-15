@@ -134,9 +134,9 @@
         <dependency>
             <groupId>fun.cubehead</groupId>
             <artifactId>visualcooldown-paper</artifactId>
-            <version>0.1.1</version>
+            <version>0.2.0</version>
             <scope>system</scope>
-            <systemPath>${project.basedir}/libs/visualcooldown-paper-0.1.1.jar</systemPath>
+            <systemPath>${project.basedir}/libs/visualcooldown-paper-0.2.0.jar</systemPath>
         </dependency>
         <dependency>
             <groupId>org.geysermc.floodgate</groupId>
