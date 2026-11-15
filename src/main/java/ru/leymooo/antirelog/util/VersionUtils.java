@@ -33,7 +33,7 @@ public class VersionUtils {
     }
 
     public static boolean isVersion(int major, int minor) {
-        return minorVersionResolved ? majorVersion >= major && minorVersion >= minor : majorVersion >= major;
+        return majorVersion > major || majorVersion == major && (!minorVersionResolved || minorVersion >= minor);
     }
 
     private static void detectServerVersion() {

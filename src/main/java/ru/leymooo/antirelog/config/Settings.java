@@ -13,7 +13,7 @@ public class Settings extends Configuration {
 
     @Final
     @Key("config-version")
-    private String configVersion = "1.9";
+    private String configVersion = "1.10";
     private Messages messages = new Messages();
 
     @Comment("Кулдавн для обычных золотых яблок во время пвп.")
@@ -168,8 +168,7 @@ public class Settings extends Configuration {
     @Key("end-crystal-cooldown")
     private int endCrystalCooldown = 30;
 
-    @Comment({"Кулдавн для любых зелий (обычные, взрывные, туманные и донатные) во время пвп.",
-            "Кулдаун учитывается отдельно для каждого вида зелья с учётом его свойств.", "Значение 0 отключает кулдаун; -1 " +
+    @Comment({"Кулдавн для любых зелий (обычные, взрывные, туманные и донатные) во время пвп.", "Значение 0 отключает кулдаун; -1 " +
             "отключает использование во время пвп"})
     @Key("potion-cooldown")
     private int potionCooldown = 20;

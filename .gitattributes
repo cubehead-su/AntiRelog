@@ -1,0 +1,6 @@
+/pom.xml -text whitespace=cr-at-eol
+/src/main/java/**/*.java text eol=lf
+/src/main/java/ru/leymooo/antirelog/config/Settings.java -text -eol whitespace=cr-at-eol
+/src/main/java/ru/leymooo/antirelog/listeners/CooldownListener.java -text -eol whitespace=cr-at-eol
+/src/main/java/ru/leymooo/antirelog/manager/CooldownManager.java -text -eol whitespace=cr-at-eol
+/src/main/resources/plugin.yml text eol=lf

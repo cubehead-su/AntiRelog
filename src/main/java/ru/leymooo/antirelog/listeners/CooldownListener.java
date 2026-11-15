@@ -17,7 +17,6 @@ import org.bukkit.inventory.meta.Damageable;
 import org.bukkit.inventory.meta.ItemMeta;
 import org.geysermc.floodgate.api.FloodgateApi;
 import org.bukkit.event.player.PlayerInteractEvent;
-import org.bukkit.event.player.PlayerDropItemEvent;
 import org.bukkit.event.player.PlayerItemConsumeEvent;
 import org.bukkit.event.player.PlayerQuitEvent;
 import org.bukkit.inventory.ItemStack;
@@ -116,7 +115,7 @@ public class CooldownListener implements Listener {
         }
     }
 
-    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
+    @EventHandler
     public void onItemEat(PlayerItemConsumeEvent event) {
         ItemStack consumeItem = event.getItem();
 
@@ -132,11 +131,6 @@ public class CooldownListener implements Listener {
             cooldownType = enchanted ? CooldownType.ENC_GOLDEN_APPLE : CooldownType.GOLDEN_APPLE;
             cooldownTime = enchanted ? settings.getEnchantedGoldenAppleCooldown() : settings.getGoldenAppleCooldown();
         }
-        if (isDrinkablePotion(consumeItem)) {
-            cooldownType = CooldownType.POTION;
-            cooldownTime = settings.getPotionCooldown();
-        }
-
         if (cooldownType != null) {
             if (cooldownTime == 0 || pvpManager.isBypassed(event.getPlayer())) {
                 return;
@@ -146,20 +140,12 @@ public class CooldownListener implements Listener {
                 return;
             }
             cooldownTime = cooldownTime * 1000;
-            if (checkCooldown(event.getPlayer(), cooldownType, cooldownTime, consumeItem)) {
+            if (checkCooldown(event.getPlayer(), cooldownType, cooldownTime)) {
                 event.setCancelled(true);
                 return;
             }
-            if (cooldownType == CooldownType.POTION) return;
             cooldownManager.addCooldown(event.getPlayer(), cooldownType);
             addItemCooldownIfNeeded(event.getPlayer(), cooldownType);
-        }
-    }
-
-    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
-    public void onPotionConsumed(PlayerItemConsumeEvent event) {
-        if (isDrinkablePotion(event.getItem())) {
-            recordPotionUse(event.getPlayer(), event.getItem());
         }
     }
 
@@ -212,25 +198,25 @@ public class CooldownListener implements Listener {
     }
 
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
+    public void onPotionConsume(PlayerItemConsumeEvent event) {
+        if (isDrinkablePotion(event.getItem())) {
+            checkPotionUse(event, event.getPlayer());
+        }
+    }
+
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
+    public void onPotionConsumed(PlayerItemConsumeEvent event) {
+        if (isDrinkablePotion(event.getItem())) {
+            recordPotionUse(event.getPlayer(), event.getItem());
+        }
+    }
+
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
     public void onPotionLaunch(ProjectileLaunchEvent e) {
         if (!(e.getEntity() instanceof ThrownPotion)) return;
         if (!(e.getEntity().getShooter() instanceof Player)) return;
 
-        Player player = (Player) e.getEntity().getShooter();
-        if (pvpManager.isBypassed(player)) return;
-
-        long cooldownTime = settings.getPotionCooldown();
-        if (cooldownTime == 0) return;
-
-        if (cooldownTime <= -1) {
-            cancelEventIfInPvp(e, CooldownType.POTION, player);
-            return;
-        }
-
-        ItemStack potion = ((ThrownPotion) e.getEntity()).getItem();
-        if (checkCooldown(player, CooldownType.POTION, cooldownTime * 1000, potion)) {
-            e.setCancelled(true);
-        }
+        checkPotionUse(e, (Player) e.getEntity().getShooter());
     }
 
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
@@ -241,20 +227,28 @@ public class CooldownListener implements Listener {
         recordPotionUse((Player) event.getEntity().getShooter(), ((ThrownPotion) event.getEntity()).getItem());
     }
 
-    private void recordPotionUse(Player player, ItemStack potion) {
-        if (settings.getPotionCooldown() > 0 && !pvpManager.isBypassed(player)) {
-            cooldownManager.addPotionCooldown(player, potion);
-            if (!pvpManager.isPvPModeEnabled() || pvpManager.isInPvP(player)) {
-                cooldownManager.addPotionItemCooldown(player, potion, settings.getPotionCooldown() * 1000L);
-            }
+    private void checkPotionUse(Cancellable event, Player player) {
+        if (pvpManager.isBypassed(player)) return;
+
+        long cooldownTime = settings.getPotionCooldown();
+        if (cooldownTime == 0) return;
+
+        if (cooldownTime <= -1) {
+            cancelEventIfInPvp(event, CooldownType.POTION, player);
+            return;
+        }
+
+        if (checkCooldown(player, CooldownType.POTION, cooldownTime * 1000)) {
+            event.setCancelled(true);
         }
     }
 
-    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
-    public void onDropPotion(PlayerDropItemEvent event) {
-        ItemStack item = event.getItemDrop().getItemStack();
-        cooldownManager.restorePotion(item);
-        event.getItemDrop().setItemStack(item);
+    private void recordPotionUse(Player player, ItemStack item) {
+        if (settings.getPotionCooldown() <= 0 || pvpManager.isBypassed(player)) return;
+        cooldownManager.addCooldown(player, CooldownType.POTION);
+        if (!pvpManager.isPvPModeEnabled() || pvpManager.isInPvP(player)) {
+            cooldownManager.addItemCooldown(player, CooldownType.POTION, settings.getPotionCooldown() * 1000L, item);
+        }
     }
 
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = false)
@@ -303,16 +297,6 @@ public class CooldownListener implements Listener {
             }
             cooldownManager.addCooldown(event.getPlayer(), CooldownType.RESPAWN_ANCHOR);
             addItemCooldownIfNeeded(event.getPlayer(), CooldownType.RESPAWN_ANCHOR);
-        } else if ((isDrinkablePotion(event.getItem()) || isThrownPotionItem(event.getItem()))
-                && settings.getPotionCooldown() != 0 && event.getAction().name().startsWith("RIGHT_CLICK")) {
-            long cooldownTime = settings.getPotionCooldown();
-            if (cooldownTime <= -1) {
-                cancelEventIfInPvp(event, CooldownType.POTION, event.getPlayer());
-                return;
-            }
-            if (checkCooldown(event.getPlayer(), CooldownType.POTION, cooldownTime * 1000, event.getItem())) {
-                event.setCancelled(true);
-            }
         }
     }
 
@@ -369,10 +353,6 @@ public class CooldownListener implements Listener {
         return itemStack.getType() == Material.POTION;
     }
 
-    private boolean isThrownPotionItem(ItemStack itemStack) {
-        return VersionUtils.isVersion(9) && (itemStack.getType() == Material.SPLASH_POTION || itemStack.getType() == Material.LINGERING_POTION);
-    }
-
     public void cancelEventIfInPvp(Cancellable event, CooldownType type, Player player) {
         if (pvpManager.isInPvP(player)) {
             event.setCancelled(true);
@@ -385,22 +365,9 @@ public class CooldownListener implements Listener {
     }
 
     private boolean checkCooldown(Player player, CooldownType cooldownType, long cooldownTime) {
-        return checkCooldown(player, cooldownType, cooldownTime, null);
-    }
-
-    private boolean checkCooldown(Player player, CooldownType cooldownType, long cooldownTime, ItemStack item) {
         boolean cooldownActive = !pvpManager.isPvPModeEnabled() || pvpManager.isInPvP(player);
-        if (!cooldownActive) return false;
-
-        long remaining;
-        if (cooldownType == CooldownType.POTION) {
-            remaining = cooldownManager.getPotionRemaining(player, item, cooldownTime);
-        } else if (cooldownManager.hasCooldown(player, cooldownType, cooldownTime)) {
-            remaining = cooldownManager.getRemaining(player, cooldownType, cooldownTime);
-        } else {
-            return false;
-        }
-        if (remaining > 0) {
+        if (cooldownActive && cooldownManager.hasCooldown(player, cooldownType, cooldownTime)) {
+            long remaining = cooldownManager.getRemaining(player, cooldownType, cooldownTime);
             int remainingInt = (int) TimeUnit.MILLISECONDS.toSeconds(remaining);
             String message = cooldownType == CooldownType.TOTEM ? settings.getMessages().getTotemCooldown() :
                     settings.getMessages().getItemCooldown();
